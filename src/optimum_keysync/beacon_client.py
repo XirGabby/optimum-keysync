@@ -271,7 +271,10 @@ class BeaconClient:
         # `body.get` for a non-object body (which nothing catches).
         try:
             body = resp.json()
-        except ValueError as e:
+        except (ValueError, RecursionError) as e:
+            # RecursionError: a 200 whose JSON nests beyond Python's
+            # recursion limit (e.g. a runaway array) must exit 6 like any
+            # other malformed body, not crash with a traceback.
             raise BeaconError(f"beacon validators returned non-JSON body: {e}") from e
         if not isinstance(body, dict):
             raise BeaconError(f"beacon validators returned unexpected body shape: {body!r}")
