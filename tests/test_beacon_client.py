@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import httpx
 import pytest
 import respx
+from click.testing import CliRunner
 
 from optimum_keysync.beacon_client import BeaconClient, BeaconError, BeaconValidator
+from optimum_keysync.cli import main
 
 BEACON_URL = "https://beacon.test"
 _VALIDATORS = BEACON_URL + "/eth/v1/beacon/states/head/validators"
@@ -66,6 +70,48 @@ def test_resolve_indices_drops_unincluded_status() -> None:
         )
     )
     assert BeaconClient(BEACON_URL).resolve_indices([9]) == []
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        {"return_value": httpx.Response(503, text="unavailable")},
+        {"side_effect": httpx.ReadTimeout("timed out")},
+        {"side_effect": httpx.ConnectError("refused")},
+        {"return_value": httpx.Response(200, text="<html>bad gateway</html>")},
+    ],
+    ids=["503-after-retries", "read-timeout", "connect-error", "non-json-200"],
+)
+def test_beacon_validators_failure_exits_6(tmp_path: Path, route: dict[str, object]) -> None:
+    """Beacon lookup failures exit 6 (beacon node failure), not 1 or 4.
+
+    Regression test for issue #24: a 5xx that outlasts the retries, a
+    timeout, a refused connection, or a non-JSON 200 from the validators
+    endpoint must surface as the documented beacon exit code, with a
+    `beacon node call failed` log line instead of a traceback.
+    """
+    idx = tmp_path / "indices.txt"
+    idx.write_text("720396\n")
+    with respx.mock(assert_all_called=False) as m:
+        m.get(f"{BEACON_URL}/eth/v1/config/deposit_contract").mock(
+            return_value=httpx.Response(200, json={"data": {"chain_id": "1"}})
+        )
+        m.get(f"{BEACON_URL}/eth/v1/beacon/states/head/validators").mock(**route)
+        result = CliRunner().invoke(
+            main,
+            [
+                "diff",
+                "--api-key",
+                "ovi_live_TESTONLY",
+                "--operator-id",
+                "42",
+                "--beacon-url",
+                BEACON_URL,
+                "--index-list-file",
+                str(idx),
+            ],
+        )
+    assert result.exit_code == 6, (result.exit_code, repr(result.exception))
 
 
 def test_normalise_index_rejects_negative() -> None:
