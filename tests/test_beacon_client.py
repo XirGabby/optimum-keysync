@@ -80,8 +80,16 @@ def test_resolve_indices_drops_unincluded_status() -> None:
         {"side_effect": httpx.ConnectError("refused")},
         {"return_value": httpx.Response(200, text="<html>bad gateway</html>")},
         {"return_value": httpx.Response(200, json=[])},
+        {"return_value": httpx.Response(200, text="[" * 2000 + "]" * 2000)},
     ],
-    ids=["503-after-retries", "read-timeout", "connect-error", "non-json-200", "non-object-200"],
+    ids=[
+        "503-after-retries",
+        "read-timeout",
+        "connect-error",
+        "non-json-200",
+        "non-object-200",
+        "deeply-nested-200",
+    ],
 )
 def test_beacon_validators_failure_exits_6(
     tmp_path: Path, route: dict[str, object], monkeypatch: pytest.MonkeyPatch
