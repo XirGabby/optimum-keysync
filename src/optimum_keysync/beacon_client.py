@@ -235,6 +235,11 @@ class BeaconClient:
             raise BeaconError(f"beacon validators failed after retries: {e}") from e
         except httpx.TransportError as e:
             raise BeaconError(f"beacon validators transport failed after retries: {e}") from e
+        except httpx.DecodingError as e:
+            # DecodingError is not a TransportError: a corrupt (e.g. gzip)
+            # body would otherwise escape as a traceback. It is not
+            # transient, so it fails fast with no retry, like the JSON guard.
+            raise BeaconError(f"beacon validators returned undecodable body: {e}") from e
 
     @tenacity.retry(
         retry=tenacity.retry_if_exception_type((httpx.TransportError, _RetryableBeaconError)),
@@ -281,7 +286,9 @@ class BeaconClient:
                 inner = entry["validator"]
                 pubkey = self._normalise(str(inner["pubkey"]))
                 status = str(entry.get("status", ""))
-            except (KeyError, TypeError, ValueError) as e:
+            except (KeyError, TypeError, ValueError, OverflowError) as e:
+                # OverflowError: a beacon can return a numeric literal like
+                # 1e400, which json decodes as infinity; int() on it raises.
                 raise BeaconError(f"beacon entry malformed: {entry!r}") from e
             out.append(BeaconValidator(validator_index=idx, pubkey=pubkey, status=status))
         return out
